@@ -1,0 +1,36 @@
+<!DOCTYPE aesl-source>
+<network>
+
+
+<!--list of global events-->
+<constant name="PAUSA_ESCAPE" value="200"/>
+<constant name="UMBRAL_ESQUINA" value="2500"/>
+<constant name="UMBRAL_OBSTACULO" value="1000"/>
+<constant name="VELOCIDAD" value="300"/>
+<constant name="VEL_ESCAPE" value="-300"/>
+
+
+<!--node Tim en MSI - 17844-->
+<node name="Tim en MSI - 17844" nodeId="{50cb5e5a-9efa-4672-ae17-738d5c391242}"><![CDATA[
+
+# Evento de proximidad
+onevent prox
+    # Verificar detección de obstáculos en diferentes zonas
+    elseif prox.horizontal[0] > UMBRAL_OBSTACULO or prox.horizontal[1] > UMBRAL_OBSTACULO then
+        # Obstáculo detectado en el lado izquierdo → Girar fuerte a la derecha
+        motor.left.target = 400
+        motor.right.target = -600
+
+    elseif prox.horizontal[3] > UMBRAL_OBSTACULO or prox.horizontal[4] > UMBRAL_OBSTACULO then
+        # Obstáculo detectado en el lado derecho → Girar fuerte a la izquierda
+        motor.left.target = -600
+        motor.right.target = 400
+
+    else
+        # Sin obstáculos cercanos → Avanzar normal
+        motor.left.target = VELOCIDAD
+        motor.right.target = VELOCIDAD
+    end]]></node>
+
+
+</network>

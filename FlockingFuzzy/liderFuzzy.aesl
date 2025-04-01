@@ -1,0 +1,214 @@
+<!DOCTYPE aesl-source>
+<network>
+
+
+<!--list of global events-->
+<constant name="CLOSING_HIGH" value="3000"/>
+<constant name="CLOSING_LOW" value="1500"/>
+<constant name="ESCAPE_DURATION" value="500"/>
+<constant name="FAR_HIGH" value="2000"/>
+<constant name="FAR_LOW" value="1000"/>
+<constant name="NEAR_HIGH" value="4000"/>
+<constant name="NEAR_LOW" value="2500"/>
+<constant name="REVERSE_THRESHOLD" value="3500"/>
+<constant name="TIMESTEP" value="20"/>
+
+
+<!--node Tom en MSI - 17844-->
+<node name="Tom en MSI - 17844" nodeId="{47318aa0-e42e-4be3-8b27-33382986a780}"><![CDATA[# Definición de variables
+var state = 0      # The state 0 = off, 1 = on
+var value_left     # Valor del sensor izquierdo
+var value_right    # Valor del sensor derecho
+var premises_left[3]  # Certainties of premises: far, closing, near (left)
+var premises_right[3] # Certainties of premises: far, closing, near (right)
+var consequents_left[6] # Certainties of consequents: very fast, fast, cruise, slow, stop, reverse (left)
+var consequents_right[6] # Certainties of consequents: very fast, fast, cruise, slow, stop, reverse (right)
+var temp           # Temporary variable for computing premises
+
+# Centros de las funciones de pertenencia de salida (ahora incluye retroceso)
+var centers[6] = [4, 3, 2, 1, 0, -2] # very fast, fast, cruise, slow, stop, reverse
+
+var height         # Height (certainty) of an output membership function
+var width = 200    # Width of triangular membership function
+var area           # Area under a consequent membership function
+var mid            # Middle of membership function
+
+var accum_weighted_left  # Accumulated weighted area over all rules (left)
+var accum_areas_left     # Accumulated area over all rules (left)
+var crisp_left           # Crisp output (left)
+
+var accum_weighted_right # Accumulated weighted area over all rules (right)
+var accum_areas_right    # Accumulated area over all rules (right)
+var crisp_right          # Crisp output (right)
+
+var i              # Loop index variable
+
+state = 1
+
+sub fuzzify
+    # Leer los sensores izquierdo y derecho
+    value_left = prox.horizontal[0]
+    value_right = prox.horizontal[4]
+    
+    # Fuzzyficación para el sensor izquierdo
+    if value_left <= FAR_LOW then premises_left[0] = 100  # Lejos
+    elseif value_left >= FAR_HIGH then premises_left[0] = 0
+    else
+        call math.muldiv(temp, (value_left - FAR_LOW), 100, (FAR_HIGH - FAR_LOW))
+        premises_left[0] = 100 - temp
+    end
+    
+    # Conjunto "Cerca" izquierdo
+    mid = CLOSING_LOW + (CLOSING_HIGH-CLOSING_LOW)/2
+    if value_left < CLOSING_LOW then premises_left[1] = 0
+    elseif value_left > CLOSING_HIGH then premises_left[1] = 0
+    elseif value_left < mid then
+        call math.muldiv(temp, (value_left - CLOSING_LOW), 100, (mid - CLOSING_LOW))
+        premises_left[1] = temp
+    else
+        call math.muldiv(temp, (value_left - mid), 100, (CLOSING_HIGH - mid))
+        premises_left[1] = 100 - temp
+    end
+    
+    # Conjunto "Muy Cerca" izquierdo
+    if value_left >= NEAR_HIGH then premises_left[2] = 100
+    elseif value_left <= NEAR_LOW then premises_left[2] = 0
+    else
+        call math.muldiv(temp, (value_left - NEAR_LOW), 100, (NEAR_HIGH - NEAR_LOW))
+        premises_left[2] = temp
+    end
+    
+    # Fuzzyficación para el sensor derecho
+    if value_right <= FAR_LOW then premises_right[0] = 100  # Lejos
+    elseif value_right >= FAR_HIGH then premises_right[0] = 0
+    else
+        call math.muldiv(temp, (value_right - FAR_LOW), 100, (FAR_HIGH - FAR_LOW))
+        premises_right[0] = 100 - temp
+    end
+    
+    # Conjunto "Cerca" derecho
+    mid = CLOSING_LOW + (CLOSING_HIGH-CLOSING_LOW)/2
+    if value_right < CLOSING_LOW then premises_right[1] = 0
+    elseif value_right > CLOSING_HIGH then premises_right[1] = 0
+    elseif value_right < mid then
+        call math.muldiv(temp, (value_right - CLOSING_LOW), 100, (mid - CLOSING_LOW))
+        premises_right[1] = temp
+    else
+        call math.muldiv(temp, (value_right - mid), 100, (CLOSING_HIGH - mid))
+        premises_right[1] = 100 - temp
+    end
+    
+    # Conjunto "Muy Cerca" derecho
+    if value_right >= NEAR_HIGH then premises_right[2] = 100
+    elseif value_right <= NEAR_LOW then premises_right[2] = 0
+    else
+        call math.muldiv(temp, (value_right - NEAR_LOW), 100, (NEAR_HIGH - NEAR_LOW))
+        premises_right[2] = temp
+    end
+
+sub apply_rules
+    call math.fill(consequents_left, 0)
+    call math.fill(consequents_right, 0)
+    
+    # Reglas para el motor izquierdo basadas en sensor derecho
+    if premises_right[0] != 0 then
+        consequents_left[0] = premises_right[0]  # Muy Rápido (obstáculo derecho lejos)
+    end
+    
+    if premises_right[0] != 0 and premises_right[1] != 0 then
+        call math.min(consequents_left[1], premises_right[0], premises_right[1]) # Rapido
+    end
+    
+    if premises_right[1] != 0 then
+        consequents_left[2] = premises_right[1]  # Normal
+    end
+    
+    # Si hay obstáculo a la derecha cerca, reducir velocidad izquierda
+    if premises_right[1] != 0 or premises_right[2] != 0 then
+        call math.max(temp, premises_right[1], premises_right[2])
+        if consequents_left[3] < temp then
+            consequents_left[3] = temp  # Aumentar certeza de "lento"
+        end
+    end
+    
+    # Si hay obstáculo a la derecha muy cerca, considerar detener o retroceder
+    if premises_right[2] != 0 then
+        # Si el obstáculo está extremadamente cerca, retroceder
+        if value_right >= REVERSE_THRESHOLD then
+            consequents_left[5] = premises_right[2]  # Retroceder
+        else
+            consequents_left[4] = premises_right[2]  # Detener
+        end
+    end
+    
+    # Reglas para el motor derecho basadas en sensor izquierdo
+    if premises_left[0] != 0 then
+        consequents_right[0] = premises_left[0]  # Muy Rápido (obstáculo izquierdo lejos)
+    end
+    
+    if premises_left[0] != 0 and premises_left[1] != 0 then
+        call math.min(consequents_right[1], premises_left[0], premises_left[1]) # Rapido
+    end
+    
+    if premises_left[1] != 0 then
+        consequents_right[2] = premises_left[1]  # Normal
+    end
+    
+    # Si hay obstáculo a la izquierda cerca, reducir velocidad derecha
+    if premises_left[1] != 0 or premises_left[2] != 0 then
+        call math.max(temp, premises_left[1], premises_left[2])
+        if consequents_right[3] < temp then
+            consequents_right[3] = temp  # Aumentar certeza de "lento"
+        end
+    end
+    
+    # Si hay obstáculo a la izquierda muy cerca, considerar detener o retroceder
+    if premises_left[2] != 0 then
+        # Si el obstáculo está extremadamente cerca, retroceder
+        if value_left >= REVERSE_THRESHOLD then
+            consequents_right[5] = premises_left[2]  # Retroceder
+        else
+            consequents_right[4] = premises_left[2]  # Detener
+        end
+    end
+
+sub defuzzify
+    # Defuzzyficación para motor izquierdo
+    accum_weighted_left = 0
+    accum_areas_left = 0
+    for i in 0:5 do  # Ahora iteramos sobre 6 consecuentes (0-5)
+        height = consequents_left[i]
+        callsub compute_area
+        accum_weighted_left += centers[i] * area
+        accum_areas_left += area
+    end
+    if accum_areas_left == 0 then accum_areas_left = 1 end
+    call math.muldiv(crisp_left, accum_weighted_left, 100, accum_areas_left)
+    
+    # Defuzzyficación para motor derecho
+    accum_weighted_right = 0
+    accum_areas_right = 0
+    for i in 0:5 do  # Ahora iteramos sobre 6 consecuentes (0-5)
+        height = consequents_right[i]
+        callsub compute_area
+        accum_weighted_right += centers[i] * area
+        accum_areas_right += area
+    end
+    if accum_areas_right == 0 then accum_areas_right = 1 end
+    call math.muldiv(crisp_right, accum_weighted_right, 100, accum_areas_right)
+
+sub compute_area
+    call math.muldiv(area, width, height, 1)
+    call math.muldiv(temp, area, height, 200)
+    area -= temp
+    area /= 100
+
+onevent prox
+    callsub fuzzify
+    callsub apply_rules
+    callsub defuzzify
+    motor.left.target = crisp_left
+    motor.right.target = crisp_right]]></node>
+
+
+</network>
